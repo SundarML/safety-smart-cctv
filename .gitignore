@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# YOLOv8 model weights
+*.pt
+*.pth
+*.onnx
+*.engine
+*.torchscript
+
+# Training runs and outputs
+runs/
+
+# Datasets (download via Roboflow)
+datasets/
+
+# Environment variables
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and temp files
+*.log
+logs/
+*.tmp
+*.cache
+
+# Word documents (generated artifact)
+*.docx

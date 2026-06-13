@@ -1,0 +1,44 @@
+cameras:
+  - id: cam_01
+    name: "Main Entrance"
+    source: 0               # webcam index; replace with RTSP URL string for IP cameras
+    # source: "rtsp://user:pass@192.168.1.100:554/stream1"
+    # source: "test_video.mp4"
+
+  # Add more cameras below:
+  # - id: cam_02
+  #   name: "Zone A"
+  #   source: "rtsp://user:pass@192.168.1.101:554/stream1"
+
+model:
+  # Trained by: python scripts/train.py
+  weights: "models/ppe.pt"
+  confidence: 0.50
+  iou: 0.45
+  device: "cpu"            # use "cuda" if you have an NVIDIA GPU
+
+ppe:
+  # Class names match the Construction Site Safety dataset from Roboflow Universe.
+  # Full class list: Hardhat, Mask, NO-Hardhat, NO-Mask, NO-Safety Vest,
+  #                  Person, Safety Cone, Safety Vest, machinery, vehicle
+  violation_classes:
+    - "NO-Hardhat"
+    - "NO-Safety Vest"
+    - "NO-Mask"
+
+  safe_classes:
+    - "Hardhat"
+    - "Safety Vest"
+    - "Mask"
+    - "Person"
+    - "Safety Cone"
+
+display:
+  show_window: true
+  frame_width: 1280
+  frame_height: 720
+
+logging:
+  save_violations: true
+  log_dir: "logs"
+  save_frames: true         # save a snapshot image on each new violation
