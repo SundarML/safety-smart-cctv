@@ -11,11 +11,21 @@ cameras:
   #   source: "rtsp://user:pass@192.168.1.101:554/stream1"
 
 model:
-  # Trained by: python scripts/train.py
+  enabled: true            # set false to disable PPE detection
   weights: "models/ppe.pt"
   confidence: 0.50
   iou: 0.45
   device: "cpu"            # use "cuda" if you have an NVIDIA GPU
+
+fire_smoke:
+  enabled: true            # set false to disable fire/smoke detection
+  weights: "models/fire_smoke.pt"
+  confidence: 0.40
+  iou: 0.45
+  device: "cpu"
+  alert_classes:
+    - "fire"
+    - "smoke"
 
 ppe:
   # Class names match the Construction Site Safety dataset from Roboflow Universe.

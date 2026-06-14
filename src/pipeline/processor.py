@@ -10,7 +10,7 @@ import cv2
 from src.detection.detector import PPEDetector
 from src.detection.ppe_rules import PPERuleChecker, ViolationReport
 from src.pipeline.stream import VideoStream
-from src.utils.drawing import draw_detections, draw_status_bar
+from src.utils.drawing import draw_detections, draw_hazard_detections, draw_status_bar
 
 logger = logging.getLogger(__name__)
 
@@ -18,11 +18,9 @@ logger = logging.getLogger(__name__)
 class CameraProcessor:
     """
     Orchestrates one camera feed end-to-end:
-      VideoStream → PPEDetector → PPERuleChecker → display / logging
+      VideoStream → PPEDetector(s) → PPERuleChecker(s) → display / logging
     """
 
-    # Minimum seconds between saving frames for the same camera to avoid
-    # flooding the disk when a worker stays in violation.
     _SAVE_COOLDOWN = 5.0
 
     def __init__(
@@ -32,6 +30,7 @@ class CameraProcessor:
         ppe_cfg: dict,
         display_cfg: dict,
         log_cfg: dict,
+        fire_smoke_cfg: dict | None = None,
     ) -> None:
         self.camera_id: str = camera_cfg["id"]
         self.camera_name: str = camera_cfg.get("name", self.camera_id)
@@ -42,14 +41,37 @@ class CameraProcessor:
             width=display_cfg.get("frame_width"),
             height=display_cfg.get("frame_height"),
         )
-        self.detector = PPEDetector(
-            weights=model_cfg["weights"],
-            confidence=model_cfg["confidence"],
-            iou=model_cfg["iou"],
-            device=model_cfg["device"],
-            violation_classes=ppe_cfg["violation_classes"],
+
+        # PPE detector (optional)
+        self.ppe_enabled: bool = model_cfg.get("enabled", True)
+        self.ppe_detector: PPEDetector | None = None
+        self.ppe_checker: PPERuleChecker | None = None
+        if self.ppe_enabled:
+            self.ppe_detector = PPEDetector(
+                weights=model_cfg["weights"],
+                confidence=model_cfg["confidence"],
+                iou=model_cfg["iou"],
+                device=model_cfg["device"],
+                violation_classes=ppe_cfg["violation_classes"],
+            )
+            self.ppe_checker = PPERuleChecker(violation_classes=ppe_cfg["violation_classes"])
+
+        # Fire/smoke detector (optional)
+        self.fire_smoke_enabled: bool = bool(
+            fire_smoke_cfg and fire_smoke_cfg.get("enabled", True)
         )
-        self.rule_checker = PPERuleChecker(violation_classes=ppe_cfg["violation_classes"])
+        self.fire_smoke_detector: PPEDetector | None = None
+        self.fire_smoke_checker: PPERuleChecker | None = None
+        if self.fire_smoke_enabled and fire_smoke_cfg:
+            alert_classes = fire_smoke_cfg.get("alert_classes", ["fire", "smoke"])
+            self.fire_smoke_detector = PPEDetector(
+                weights=fire_smoke_cfg["weights"],
+                confidence=fire_smoke_cfg["confidence"],
+                iou=fire_smoke_cfg["iou"],
+                device=fire_smoke_cfg["device"],
+                violation_classes=alert_classes,
+            )
+            self.fire_smoke_checker = PPERuleChecker(violation_classes=alert_classes)
 
         self.show_window: bool = display_cfg.get("show_window", True)
         self.save_violations: bool = log_cfg.get("save_violations", True)
@@ -58,9 +80,19 @@ class CameraProcessor:
         self.log_dir = Path(log_cfg.get("log_dir", "logs")) / self.camera_id
         if self.save_violations:
             self.log_dir.mkdir(parents=True, exist_ok=True)
-            self._init_csv_log()
+            self._init_csv_log("violations.csv", ["timestamp", "camera", "violations"])
+            if self.fire_smoke_enabled:
+                self._init_csv_log("hazards.csv", ["timestamp", "camera", "hazards"])
 
-        self._last_save_time = 0.0
+        self._last_ppe_save   = 0.0
+        self._last_hazard_save = 0.0
+
+        active = []
+        if self.ppe_enabled:
+            active.append("PPE")
+        if self.fire_smoke_enabled:
+            active.append("Fire/Smoke")
+        logger.info("[%s] Active detectors: %s", self.camera_name, ", ".join(active) or "none")
 
     # ------------------------------------------------------------------
     # Main loop
@@ -76,14 +108,25 @@ class CameraProcessor:
                 if not ret:
                     continue
 
-                detections = self.detector.detect(frame)
-                report = self.rule_checker.check(detections)
+                annotated = frame.copy()
+                ppe_report: ViolationReport | None = None
+                fire_smoke_report: ViolationReport | None = None
 
-                annotated = draw_detections(frame.copy(), detections)
-                annotated = draw_status_bar(annotated, self.camera_name, report)
+                if self.ppe_enabled and self.ppe_detector and self.ppe_checker:
+                    ppe_detections = self.ppe_detector.detect(frame)
+                    ppe_report = self.ppe_checker.check(ppe_detections)
+                    annotated = draw_detections(annotated, ppe_detections)
+                    if ppe_report.has_violation:
+                        self._log_event(frame, ppe_report.violations, "violations.csv", "hazards", "_last_ppe_save")
 
-                if report.has_violation:
-                    self._handle_violation(frame, report)
+                if self.fire_smoke_enabled and self.fire_smoke_detector and self.fire_smoke_checker:
+                    fs_detections = self.fire_smoke_detector.detect(frame)
+                    fire_smoke_report = self.fire_smoke_checker.check(fs_detections)
+                    annotated = draw_hazard_detections(annotated, fs_detections)
+                    if fire_smoke_report.has_violation:
+                        self._log_event(frame, fire_smoke_report.violations, "hazards.csv", "hazards", "_last_hazard_save")
+
+                annotated = draw_status_bar(annotated, self.camera_name, ppe_report, fire_smoke_report)
 
                 if self.show_window:
                     cv2.imshow(f"PPE Monitor — {self.camera_name}", annotated)
@@ -96,32 +139,36 @@ class CameraProcessor:
             logger.info("[%s] Stream stopped.", self.camera_name)
 
     # ------------------------------------------------------------------
-    # Violation handling
+    # Logging helpers
     # ------------------------------------------------------------------
 
-    def _handle_violation(self, frame, report: ViolationReport) -> None:
+    def _log_event(
+        self,
+        frame,
+        labels: list[str],
+        csv_filename: str,
+        frame_prefix: str,
+        cooldown_attr: str,
+    ) -> None:
         if not self.save_violations:
             return
 
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        unique_violations = sorted(set(report.violations))
+        unique_labels = sorted(set(labels))
 
-        # Append to CSV log
-        with open(self.log_dir / "violations.csv", "a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([timestamp, self.camera_name, "; ".join(unique_violations)])
+        with open(self.log_dir / csv_filename, "a", newline="") as f:
+            csv.writer(f).writerow([timestamp, self.camera_name, "; ".join(unique_labels)])
 
-        # Save snapshot with cooldown so one prolonged event doesn't flood disk
         now = time.monotonic()
-        if self.save_frames and (now - self._last_save_time) >= self._SAVE_COOLDOWN:
+        if self.save_frames and (now - getattr(self, cooldown_attr)) >= self._SAVE_COOLDOWN:
             ts_file = time.strftime("%Y%m%d_%H%M%S")
-            path = self.log_dir / f"violation_{ts_file}.jpg"
+            path = self.log_dir / f"{frame_prefix}_{ts_file}.jpg"
             cv2.imwrite(str(path), frame)
-            logger.warning("[%s] Violation saved: %s → %s", self.camera_name, unique_violations, path)
-            self._last_save_time = now
+            logger.warning("[%s] %s saved → %s", self.camera_name, unique_labels, path)
+            setattr(self, cooldown_attr, now)
 
-    def _init_csv_log(self) -> None:
-        csv_path = self.log_dir / "violations.csv"
-        if not csv_path.exists():
-            with open(csv_path, "w", newline="") as f:
-                csv.writer(f).writerow(["timestamp", "camera", "violations"])
+    def _init_csv_log(self, filename: str, headers: list[str]) -> None:
+        path = self.log_dir / filename
+        if not path.exists():
+            with open(path, "w", newline="") as f:
+                csv.writer(f).writerow(headers)

@@ -47,6 +47,7 @@ def run_camera(cfg: dict, camera_cfg: dict) -> None:
         ppe_cfg=cfg["ppe"],
         display_cfg=cfg["display"],
         log_cfg=cfg["logging"],
+        fire_smoke_cfg=cfg.get("fire_smoke"),
     )
     processor.run()
 
