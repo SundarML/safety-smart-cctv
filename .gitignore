@@ -47,6 +47,3 @@ desktop.ini
 logs/
 *.tmp
 *.cache
-
-# Word documents (generated artifact)
-*.docx
