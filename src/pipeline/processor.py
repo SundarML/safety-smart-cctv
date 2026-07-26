@@ -117,7 +117,7 @@ class CameraProcessor:
                     ppe_report = self.ppe_checker.check(ppe_detections)
                     annotated = draw_detections(annotated, ppe_detections)
                     if ppe_report.has_violation:
-                        self._log_event(frame, ppe_report.violations, "violations.csv", "hazards", "_last_ppe_save")
+                        self._log_event(frame, ppe_report.violations, "violations.csv", "violation", "_last_ppe_save")
 
                 if self.fire_smoke_enabled and self.fire_smoke_detector and self.fire_smoke_checker:
                     fs_detections = self.fire_smoke_detector.detect(frame)

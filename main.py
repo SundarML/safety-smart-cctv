@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import re
 import threading
 
 import yaml
@@ -34,10 +36,46 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+_ENV_VAR_RE = re.compile(r"\$\{(\w+)\}")
+
+
+def _load_dotenv(path: str = ".env") -> None:
+    """Populate os.environ from a .env file, without overriding real env vars."""
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip())
+
+
+def _resolve_env_vars(value: str) -> str:
+    """Substitute ${VAR_NAME} placeholders (e.g. in RTSP credentials) from the environment."""
+
+    def sub(match: re.Match) -> str:
+        var = match.group(1)
+        resolved = os.environ.get(var)
+        if resolved is None:
+            raise RuntimeError(
+                f"Config references ${{{var}}} but that environment variable is not set "
+                f"(add it to .env — see .env.example)"
+            )
+        return resolved
+
+    return _ENV_VAR_RE.sub(sub, value)
+
 
 def load_config(path: str) -> dict:
+    _load_dotenv()
     with open(path) as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+    for cam in cfg.get("cameras", []):
+        if isinstance(cam.get("source"), str):
+            cam["source"] = _resolve_env_vars(cam["source"])
+    return cfg
 
 
 def run_camera(cfg: dict, camera_cfg: dict) -> None:

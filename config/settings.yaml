@@ -1,14 +1,21 @@
 cameras:
   - id: cam_01
-    name: "Main Entrance"
-    source: 0               # webcam index; replace with RTSP URL string for IP cameras
-    # source: "rtsp://user:pass@192.168.1.100:554/stream1"
+    name: "Home Entrance"
+    source: "rtsp://admin:${DVR_PASSWORD}@192.168.150.100:554/Streaming/Channels/102"
+    # source: 0               # webcam index
     # source: "test_video.mp4"
 
-  # Add more cameras below:
-  # - id: cam_02
-  #   name: "Zone A"
-  #   source: "rtsp://user:pass@192.168.1.101:554/stream1"
+  - id: cam_02
+    name: "Main Street"
+    source: "rtsp://admin:${DVR_PASSWORD}@192.168.150.100:554/Streaming/Channels/202"
+
+  - id: cam_03
+    name: "Inside House"
+    source: "rtsp://admin:${DVR_PASSWORD}@192.168.150.100:554/Streaming/Channels/302"
+
+  - id: cam_04
+    name: "Backyard"
+    source: "rtsp://admin:${DVR_PASSWORD}@192.168.150.100:554/Streaming/Channels/402"
 
 model:
   enabled: true            # set false to disable PPE detection
