@@ -27,7 +27,9 @@ import threading
 
 import yaml
 
+from src.pipeline.display import GridDisplay
 from src.pipeline.processor import CameraProcessor
+from src.utils.dvr_discovery import resolve_dvr_hosts
 
 logging.basicConfig(
     level=logging.INFO,
@@ -75,11 +77,12 @@ def load_config(path: str) -> dict:
     for cam in cfg.get("cameras", []):
         if isinstance(cam.get("source"), str):
             cam["source"] = _resolve_env_vars(cam["source"])
+    resolve_dvr_hosts(cfg.get("cameras", []), config_path=path)
     return cfg
 
 
-def run_camera(cfg: dict, camera_cfg: dict) -> None:
-    processor = CameraProcessor(
+def build_processor(cfg: dict, camera_cfg: dict) -> CameraProcessor:
+    return CameraProcessor(
         camera_cfg=camera_cfg,
         model_cfg=cfg["model"],
         ppe_cfg=cfg["ppe"],
@@ -87,7 +90,6 @@ def run_camera(cfg: dict, camera_cfg: dict) -> None:
         log_cfg=cfg["logging"],
         fire_smoke_cfg=cfg.get("fire_smoke"),
     )
-    processor.run()
 
 
 def main() -> None:
@@ -114,17 +116,25 @@ def main() -> None:
 
     logger.info("Starting PPE monitoring — %d camera(s)", len(cameras))
 
-    if len(cameras) == 1:
-        run_camera(cfg, cameras[0])
-    else:
-        threads = [
-            threading.Thread(target=run_camera, args=(cfg, cam), daemon=True, name=cam["id"])
-            for cam in cameras
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+    processors = [build_processor(cfg, cam) for cam in cameras]
+    threads = [
+        threading.Thread(target=proc.run, daemon=True, name=cam["id"])
+        for proc, cam in zip(processors, cameras)
+    ]
+    for t in threads:
+        t.start()
+
+    if cfg["display"].get("show_window", True):
+        display_cfg = cfg["display"]
+        GridDisplay(
+            processors,
+            window_size=(display_cfg.get("frame_width", 1280), display_cfg.get("frame_height", 720)),
+        ).run()
+
+    for proc in processors:
+        proc.request_stop()
+    for t in threads:
+        t.join(timeout=5.0)
 
 
 if __name__ == "__main__":

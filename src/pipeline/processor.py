@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import csv
 import logging
+import threading
 import time
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from src.detection.detector import PPEDetector
 from src.detection.ppe_rules import PPERuleChecker, ViolationReport
@@ -73,7 +75,10 @@ class CameraProcessor:
             )
             self.fire_smoke_checker = PPERuleChecker(violation_classes=alert_classes)
 
-        self.show_window: bool = display_cfg.get("show_window", True)
+        self._frame_lock = threading.Lock()
+        self._latest_frame: np.ndarray | None = None
+        self._stop_requested = threading.Event()
+
         self.save_violations: bool = log_cfg.get("save_violations", True)
         self.save_frames: bool = log_cfg.get("save_frames", True)
 
@@ -103,7 +108,7 @@ class CameraProcessor:
         logger.info("[%s] Stream started (source=%r)", self.camera_name, self.stream.source)
 
         try:
-            while self.stream.is_running():
+            while self.stream.is_running() and not self._stop_requested.is_set():
                 ret, frame = self.stream.read()
                 if not ret:
                     continue
@@ -128,15 +133,19 @@ class CameraProcessor:
 
                 annotated = draw_status_bar(annotated, self.camera_name, ppe_report, fire_smoke_report)
 
-                if self.show_window:
-                    cv2.imshow(f"PPE Monitor — {self.camera_name}", annotated)
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
-                        logger.info("[%s] Quit key pressed.", self.camera_name)
-                        break
+                with self._frame_lock:
+                    self._latest_frame = annotated
         finally:
             self.stream.stop()
-            cv2.destroyAllWindows()
             logger.info("[%s] Stream stopped.", self.camera_name)
+
+    def get_latest_frame(self) -> np.ndarray | None:
+        """Most recently annotated frame, or None if the stream hasn't produced one yet."""
+        with self._frame_lock:
+            return self._latest_frame
+
+    def request_stop(self) -> None:
+        self._stop_requested.set()
 
     # ------------------------------------------------------------------
     # Logging helpers
